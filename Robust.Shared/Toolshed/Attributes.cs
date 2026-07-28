@@ -93,3 +93,10 @@ public sealed class CommandInvocationContextAttribute : Attribute;
 /// </remarks>
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class TakesPipedTypeAsGenericAttribute : Attribute;
+
+[AttributeUsage(AttributeTargets.Parameter)]
+public sealed class ValueArrayAttribute : Attribute
+{
+    public int MinLength { get; init; }
+    public int MaxLength { get; init; }
+}
