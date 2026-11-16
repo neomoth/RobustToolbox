@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -113,12 +114,20 @@ public sealed class ListTypeParser<T> : TypeParser<List<T>>
                 // TODO TOOLSHED fix
                 ctx.Error = null;
 
+                // Starlight begin
+                var typed = ctx.OutOfInput ? string.Empty : ctx.Input[ctx.Index..(ctx.MaxIndex + 1)];
+
                 var result = Toolshed.TryAutocomplete(ctx, typeof(T), arg);
                 if (result is null) return result;
-                var opts = result.Options.Select(opt =>
+                var opts = result.Options
+                    .Where(opt => (opt.Flags & CompletionOptionFlags.AppendOnly) != 0
+                                  || opt.Value.StartsWith(typed, StringComparison.OrdinalIgnoreCase))
+                    .Select(opt =>
                     new CompletionOption(opt.Value,
                         opt.Hint,
-                        opt.Flags | CompletionOptionFlags.NoFilter | CompletionOptionFlags.AppendOnly));
+                        opt.Flags | CompletionOptionFlags.NoFilter | CompletionOptionFlags.AppendOnly |
+                        CompletionOptionFlags.PartialCompletion));
+                // Starlight end
                 return new CompletionResult(opts.ToArray(), result.Hint);
             }
 

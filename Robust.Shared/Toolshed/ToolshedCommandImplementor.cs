@@ -5,6 +5,8 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using Robust.Shared._Starlight.Toolshed.Syntax;
+using Robust.Shared.Console;
 using Robust.Shared.Exceptions;
 using Robust.Shared.Localization;
 using Robust.Shared.Toolshed.Errors;
@@ -15,7 +17,7 @@ using Invocable = System.Func<Robust.Shared.Toolshed.CommandInvocationArguments,
 
 namespace Robust.Shared.Toolshed;
 
-internal sealed class ToolshedCommandImplementor
+internal sealed partial class ToolshedCommandImplementor // Starlight edit
 {
     public readonly ToolshedCommand Owner;
     public readonly string? SubCommand;
@@ -175,6 +177,28 @@ internal sealed class ToolshedCommandImplementor
         DebugTools.AssertNotNull(arg.Parser);
 
         parsed = null;
+
+        // Starlight begin - `null` / `_` argument keywords
+        switch (TryEatArgKeyword(ctx))
+        {
+            case ArgKeyword.Null:
+            case ArgKeyword.Skip when !arg.IsOptional:
+                if (!arg.IsNullable)
+                {
+                    ctx.Error = new ArgumentNotNullableError(arg.Type);
+                    ctx.Error.Contextualize(ctx.Input, (start, Math.Max(start + 1, ctx.Index)));
+                    return false;
+                }
+
+                parsed = null;
+                return FinishKeywordArgument(ctx, arg, save);
+            case ArgKeyword.Skip:
+                parsed = arg.DefaultValue;
+                return FinishKeywordArgument(ctx, arg, save);
+            // ArgKeyword.Escaped: the backslash was consumed, the parser handles the literal "null"/"_" as usual.
+        }
+        // Starlight end
+
         if (ctx.PeekCommandOrBlockTerminated() || ctx is {OutOfInput: true, GenerateCompletions: false})
         {
             if (!arg.IsOptional)
@@ -214,11 +238,14 @@ internal sealed class ToolshedCommandImplementor
 
                 // Some parsers might already generate completions when they fail the initial parsing.
                 if (ctx.Completions != null)
+                {
+                    ctx.Completions = WithKeywordCompletions(arg, ctx.Completions); // Starlight edit
                     return false;
+                }
 
                 ctx.Restore(save);
                 ctx.Error = null;
-                ctx.Completions ??= arg.Parser.TryAutocomplete(ctx, arg);
+                ctx.Completions ??= WithKeywordCompletions(arg, arg.Parser.TryAutocomplete(ctx, arg)); // Starlight edit
                 TrySetArgHint(ctx, arg);
                 return false;
             }
@@ -242,7 +269,7 @@ internal sealed class ToolshedCommandImplementor
 
         ctx.Restore(save);
         ctx.Error = null;
-        ctx.Completions ??= arg.Parser!.TryAutocomplete(ctx, arg);
+        ctx.Completions ??= WithKeywordCompletions(arg, arg.Parser!.TryAutocomplete(ctx, arg)); // Starlight edit
         TrySetArgHint(ctx, arg);
 
         // TODO TOOLSHED invalid-fail
@@ -390,6 +417,27 @@ internal sealed class ToolshedCommandImplementor
             argType = argType.GetElementType()!;
         }
 
+        // Starlight begin - Nullable<T> arguments are parsed using the parser for T.
+        var isNullable = Nullable.GetUnderlyingType(argType) != null;
+        argType = Nullable.GetUnderlyingType(argType) ?? argType;
+
+        if (!isNullable && !argType.IsValueType)
+        {
+            // Nullable reference type annotations (e.g. ICommonSession? player).
+            var info = new NullabilityInfoContext().Create(arg);
+            var state = isParamsCollection ? info.ElementType?.ReadState : info.ReadState;
+            isNullable = state == NullabilityState.Nullable;
+        }
+
+        // [Optional] without an explicit default gives Missing/DBNull, which can't be cast to anything.
+        // Treat it as null, which evaluates to null for nullable types and default(T) otherwise.
+        var defaultValue = arg.DefaultValue is DBNull or Missing ? null : arg.DefaultValue;
+
+        // A reference type explicitly defaulting to null is nullable, even without annotations.
+        if (arg.IsOptional && defaultValue == null && !argType.IsValueType)
+            isNullable = true;
+        // Starlight end
+
         // TODO TOOLSHED
         // Find a good way to give parsers access to argument attributes.
         // I don't want to give just content access to all (possibly internal) attributes/
@@ -399,9 +447,12 @@ internal sealed class ToolshedCommandImplementor
             argType,
             GetArgumentParser(arg, argType),
             arg.IsOptional,
-            arg.DefaultValue,
+            defaultValue, // Starlight
             isParamsCollection,
-            arg.GetCustomAttribute<ListLengthAttribute>());
+            arg.GetCustomAttribute<ListLengthAttribute>())
+        {
+            IsNullable = isNullable, // Starlight
+        };
     }
 
     private ITypeParser? GetArgumentParser(ParameterInfo param, Type type)
@@ -600,6 +651,22 @@ internal sealed class ToolshedCommandImplementor
         MethodInfo? evalMethod;
 
         var isParamsCollection = param.HasCustomAttribute<ParamArrayAttribute>();
+        // Starlight begin - Nullable<T> parameters are parsed as T, so need their own evaluation.
+        var nullableUnderlying = Nullable.GetUnderlyingType(isParamsCollection
+            ? param.ParameterType.GetElementType()!
+            : param.ParameterType);
+
+        if (nullableUnderlying != null)
+        {
+            evalMethod = typeof(NullableValueRef<>)
+                .MakeGenericType(nullableUnderlying)
+                .GetMethod(isParamsCollection
+                        ? nameof(NullableValueRef<>.EvaluateParamsCollection)
+                        : nameof(NullableValueRef<>.EvaluateParameter),
+                    BindingFlags.Static | BindingFlags.NonPublic)!;
+        }
+        else
+        // Starlight end
         if (isParamsCollection)
         {
             // ValueRef<T>.EvaluateParamsCollection
@@ -790,7 +857,12 @@ public readonly record struct CommandArgument(
     bool IsOptional,
     object? DefaultValue,
     bool IsParamsCollection,
-    ListLengthAttribute? ListLengthAttribute);
+    ListLengthAttribute? ListLengthAttribute)
+{
+    // Starlight begin
+    public bool IsNullable { get; init; }
+    // Starlight end
+}
 
 public sealed class ArgumentParseError(Type type, Type parser) : ConError
 {

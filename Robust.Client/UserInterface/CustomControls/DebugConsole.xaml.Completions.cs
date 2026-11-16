@@ -366,7 +366,11 @@ public sealed partial class DebugConsole
 
         if ((completionFlags & CompletionOptionFlags.AppendOnly) != 0)
         {
-            CommandBar.SelectionStart = CommandBar.CursorPosition;
+            // Starlight begin
+            var cursor = CommandBar.CursorPosition;
+            var overlap = MatchingPrefixLength(CommandBar.Text, Math.Max(0, lastRange.start), cursor, completion);
+            CommandBar.SelectionStart = cursor - overlap;
+            // Starlight end
         }
         else
         {
