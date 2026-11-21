@@ -236,18 +236,20 @@ internal abstract partial class SharedReplayRecordingManager
 
                 i += 1;
             }
-
-            taskCompletionSource.TrySetResult();
         }
         catch (Exception e)
         {
             taskCompletionSource.TrySetException(e);
+            return; // Starlight
         }
         finally
         {
             archive.Dispose();
             compressionContext.Dispose();
         }
+
+        // Starlight: moved to end
+        taskCompletionSource.TrySetResult();
     }
 #pragma warning restore RA0004
 }

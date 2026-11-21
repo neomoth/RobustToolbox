@@ -316,6 +316,8 @@ internal abstract partial class SharedReplayRecordingManager : IReplayRecordingM
         _recState.WriteCommandChannel.Complete();
         _recState.Done = true;
 
+        _finalizingWriteTasks.Add(_recState.WriteTask); // Starlight
+
         _recState = null;
     }
 
